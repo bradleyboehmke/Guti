@@ -63,7 +63,7 @@ dataFilterDataTable <- function(currentValues) {
   filterDataTableResult <- DT::renderDataTable({
       #post dataset that will filter entire analytic
       if(length(currentValues$data)>0){
-        currentValues$data[,c('Date','sulfate','nitrate')]}
+        currentValues$data[,c('Date','sulfate')]}
       else{
         df<-as.data.frame(c())
       }

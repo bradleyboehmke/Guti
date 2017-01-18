@@ -7,22 +7,14 @@ config$analyticVersion <- "1.0.0"
 
 # List all data fields that this analytic requires. These will be used to pull back relavant data sets and filter out the returned values.
 # Example:
-config$dataFields <- c("sourceAddress",
-                       "destinationAddress",
-                       "transportProtocol",
-                       "bytesIn",
-                       "bytesOut",
-                       "categoryOutcome",
-                       "ad.SCN",
-                       "IP_Pair",
-                       "Device_Name")
+config$dataFields <- paste0("V", 1:85)
 
 # List of optional data fields to include in this analytic. If they are not in the data set, a blank value for each field will be added to all of your data.
 #config$optionalDataFields <- c("phosphate")
 
 # List specific data types if needed. For all data types not use {}.
 # This will enforce that ONLY data from that source will be included.
-config$dataTypes <- c('sampledata')
+config$dataTypes <- c('netscreen')
 # Example:
 #config$dataTypes <- c('ARCYBER-CEF-MCAFEE-INTRUSHIELD')
 

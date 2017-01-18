@@ -7,7 +7,7 @@
 library('shiny')
 library('shinydashboard')
 library('lubridate')
-library('DT') #must use git hub version!!!! must be version 0.1.45 or >
+library('DT')#must use git hub version!!!! must be version 0.1.45 or >
 library('shinyBS')
 library('htmlwidgets')
 library('plotly')
@@ -108,10 +108,10 @@ server <- function(input, output, session) {
       updateValues(currentValues)
       currentValues$loadedDataSets <- input$dataFiles
     }, warning = function(w) {
-      print(paste("loadFiles warning (1): ",w))
+      print(paste("loadFiles warning: ",w))
       clearData(currentValues)
     }, error = function(e) {
-      print(paste("loadFiles error (2): ",e))
+      print(paste("loadFiles error: ",e))
       clearData(currentValues)
     }, finally = {
     })
