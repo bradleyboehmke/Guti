@@ -1,0 +1,300 @@
+---
+title: "App Demo"
+output: 
+  flexdashboard::flex_dashboard
+    #orientation: rows
+runtime: shiny
+---
+
+```{r global, include=FALSE}
+options(width = 100,scipen = 999)
+library(shiny)
+library(rmarkdown)
+library(flexdashboard)
+library(lattice)
+library(matrixStats)
+library(networkD3)
+library(Matrix)
+library(caret)
+library(ggplot2)
+library(gplots)
+library(RColorBrewer)
+library(tidyr)
+library(dplyr)
+library(qdapTools)
+
+source("Gutie_functions.R")
+
+sampledata = as.data.frame(readr::read_csv("sampledata.csv"))
+
+charc_vars = which(lapply(sampledata, class) == "character",arr.ind = TRUE)
+sampledata[,charc_vars] = lapply(sampledata[,charc_vars],as.factor)
+num_rows = as.numeric(nrow(sampledata))
+block_choice = get_all_factors(num_rows)
+
+```
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput("blocks","Select # of blocks",choices = block_choice,selected = block_choice[8])
+
+num_blocks = reactive({
+  num_blocks = as.numeric(input$blocks)
+})
+
+numericInput("num_IPs","Enter # of IPs to consider",value = 10, min = 0, max = 50)
+
+num_IPs = reactive({
+  num_IPs = as.numeric(input$num_IPs)
+})
+
+radioButtons("MD_plot","Select which plot you would like to view",choices = c("All blocks","Top 20"))
+
+
+```
+
+Column {.tabset .tabset-fade}
+-----------------------------------------------------------------------
+
+### State Vector Matrix
+
+```{r}
+
+
+
+State_Vector = reactive({
+  
+numeric_vars = as.numeric(sum(sapply(sampledata,is.numeric)==TRUE))
+mylist = which(sapply(sampledata,nlevels) < 100,arr.ind = TRUE)
+block_length = as.numeric(floor(num_rows / num_blocks()))
+num_levels = as.numeric(sum(sapply(sampledata[mylist],nlevels)))
+block_width = num_levels + numeric_vars + num_IPs()*2
+State_Vector = matrix(nrow = num_blocks(), ncol = block_width)
+
+i=1
+start = 1
+for (i in 1:num_blocks()){
+  stopp = block_length*i
+  assign("temp",sampledata[start:stopp,])
+  assign(paste("block",i,sep = ""),temp)
+  temp_fac = temp %>% select_if(is.factor)
+  mylist = which(sapply(temp_fac,nlevels) < 100,arr.ind = TRUE)
+  vec1 = sapply(temp_fac[mylist],summary)
+  if ("sourceAddress" %in% names(temp) ==TRUE) vec3 = head(summary(temp$sourceAddress),n=num_IPs())
+  if ("destinationAddress" %in% names(temp) ==TRUE) vec3 = c(vec3,head(summary(temp$destinationAddress),n=num_IPs()))
+  temp_num = temp %>% select_if(is.numeric)
+  vec2 = sapply(temp_num,sum)
+  vec0 = c(unlist(vec1),unlist(vec2))
+  if (exists("vec3")) vec0 = c(vec0,vec3)
+  State_Vector[i,] = vec0
+  start = stopp + 1
+  next
+}
+namelist = c(unlist(sapply(temp_fac[mylist],levels)),names(temp_num),paste("S",1:num_IPs(),sep=""),paste("D",1:num_IPs(),sep=""))
+colnames(State_Vector) = namelist
+ return(State_Vector)
+})
+
+DT::renderDataTable({State_Vector()}, options=list(pageLength=15, order = list(list(1, 'asc')), scrollX=TRUE))
+
+```
+
+### Mahalanobis Distance
+```{r warning=FALSE}
+
+reduced_sv = reactive({
+  col2rmv = which(colVars(State_Vector()) < .1)
+  reduced_sv = subset(State_Vector(),select = -col2rmv)
+  col2rmv = findLinearCombos(reduced_sv)$remove
+  reduced_sv = subset(reduced_sv,select = -col2rmv)
+  
+  C = cor(reduced_sv)
+  samp = data.frame(which(apply(abs(C),MARGIN = 2,function(x) between(x,.95,1.0)),arr.ind = TRUE))
+  mylist = data.frame(matrix(nrow = nrow(C),ncol=2))
+  colnames(mylist) = c("num","name")
+  mylist[,1] = 1:ncol(C)
+  mylist[,2] = colnames(reduced_sv)
+  temp = lookup(samp,mylist)
+  col2rmv = which(colnames(reduced_sv) %in% temp[duplicated(temp)])
+  reduced_sv = subset(reduced_sv,select = -col2rmv)
+  return(reduced_sv)
+})
+
+MD_output = reactive({
+  MD_output = mahalanobis3(reduced_sv())
+  })
+
+DF2 = reactive({
+  N = nrow(reduced_sv())
+  M = ncol(reduced_sv())
+  temp2 = MD_output()$bd %*% diag(1/colSums(MD_output()$bd))
+  colnames(temp2) = colnames(MD_output()$bd)
+  temp3 = data.frame(cbind(c(1:N),MD_output()$md,temp2))
+  colnames(temp3)[1:2] = c("Block","MD")
+  DF2 = temp3 %>% gather(Col_Name,BD,3:(M+2))
+  DF2$Col_Name <- factor(DF2$Col_Name, levels=unique(DF2$Col_Name))
+  return(DF2)
+})
+
+DF3 = reactive({
+  M = ncol(reduced_sv())
+  top20 = MD_output()$md_index[1:20]
+  temp4 = MD_output()$bd %*% diag(1/colSums(MD_output()$bd))
+  colnames(temp4) = colnames(MD_output()$bd)
+  temp5 = data.frame(top20,MD_output()$md[top20],temp4[top20,])
+  colnames(temp5)[1:2] = c("Block","MD")
+  DF3 = temp5 %>% gather(Col_Name,BD,3:(M+2))
+  DF3$Col_Name <- factor(DF3$Col_Name, levels=unique(DF3$Col_Name))
+return(DF3)
+})
+
+renderPlot({
+  if (input$MD_plot == "All blocks") {
+    
+  ggplot(DF2(),aes(x=Col_Name,y=Block,color = MD,size = BD)) +
+    geom_point() +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 45, hjust = 1),axis.text.y = element_text(angle = 0,hjust = -.5)) +
+    scale_y_discrete(name = "Data Blocks",limit = DF2()$Block) +
+    scale_color_gradient(low="white",high="steelblue")
+
+} else {
+
+  ggplot(DF3(),aes(x=Col_Name,y=Block,color = MD,size = BD)) +
+    geom_point() +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 45, hjust = 1),axis.text.y = element_text(angle = 0,hjust = -.5)) +
+    scale_y_discrete(name = "Data Blocks",limit = DF3()$Block) +
+    scale_color_gradient(low="white",high="steelblue")
+}
+})
+```
+
+
+```{r warning=FALSE}
+
+```
+
+### Factor Analysis
+```{r warning=FALSE}
+curvepoints = reactive({
+  N = nrow(reduced_sv())
+  M = ncol(reduced_sv())
+  return(curvepoints = Hornscurve(N,M))
+  })
+
+FA_output = reactive({
+  FA_output = Factor_Analysis(reduced_sv(),curvepoints())
+})
+
+IFS_score = reactive({
+  IFS_score = list(unrotated = IFS2(FA_output()$fa_loadings),rotated = IFS2(FA_output()$fa_loadings_rotated))
+})
+
+myloadings = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    myloadings = as.matrix(FA_output()$fa_loadings_rotated)
+  } else {
+    myloadings = as.matrix(FA_output()$fa_loadings)
+  }
+  return(myloadings)
+})
+
+scores = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    scores = FA_output()$fa_scores_rotated
+    colnames(scores) = paste("FS",1:FA_output()$num_factors,sep="")
+  } else {
+    scores = FA_output()$fa_scores
+    colnames(scores) = paste("FS",1:FA_output()$num_factors,sep="")
+  }
+  return(scores)
+})
+
+lab = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    lab = "Rotated Scores: "
+  } else {
+    lab = "Original Scores: "
+  }
+  return(lab)
+})
+
+renderPlot({
+  heatmap.2(myloadings(),Rowv = FALSE,Colv = FALSE,dendrogram = "none",scale = "none",trace = "none",col = brewer.pal(8,"RdBu"),labRow = colnames(reduced_sv()),labCol = c(1:ncol(reduced_sv())),density.info = "none",lmat = rbind(c(4,4,0),c(2,1,0),c(3,3,0)), lhei = c(1,4,0.2), lwid = c(0.5,5,1),key.xlab = "",breaks = c(-1,-0.75,-0.5,-0.25,0,0.25,0.5,0.75,1),colsep = 1:ncol(myloadings()),rowsep = 1:nrow(myloadings()), sepcolor = "white",sepwidth = c(0.0001,0.0001))
+})
+
+
+```
+
+### Factor Score Plots
+```{r}
+combos = reactive({
+  combos = t(combn(1:FA_output()$num_factors,m=2))
+  combos = paste(combos[,1],combos[,2],sep = ",")
+return(combos)
+# selectInput("fs_plot2","Select factor score pairing for plot 2",choices = )
+# selectInput("fs_plot3","Select factor score pairing for plot 3",choices = )
+# selectInput("fs_plot4","Select factor score pairing for plot 4",choices = )
+})
+
+# observe({
+# selectInput("fs_plot1","Select factor score pairing for plot 1",choices = combos())
+# })
+# fs_score_pair = reactive({
+#   fs_score_pair = matrix(nrow=2,ncol = 4)
+#   fs_score_pair[,1] = fs_plot1
+#   fs_score_pair[,2] = fs_plot2
+#   fs_score_pair[,3] = fs_plot3
+#   fs_score_pair[,4] = fs_plot4
+# })
+
+renderPlot({
+par(mfrow=c(2,2))
+plot(scores()[,1],scores()[,2],xlab = paste(lab(),1,sep = ""), ylab = paste(lab(),2,sep = ""),pch=".")
+text(scores()[,1],scores()[,2],labels = 1:ncol(reduced_sv()),col = "blue")
+plot(scores()[,3],scores()[,4],xlab = paste(lab(),3,sep = ""), ylab = paste(lab(),4,sep = ""),pch=".")
+text(scores()[,3],scores()[,4],labels = 1:ncol(reduced_sv()),col = "blue")
+plot(scores()[,5],scores()[,6],xlab = paste(lab(),5,sep = ""), ylab = paste(lab(),6,sep = ""),pch=".")
+text(scores()[,5],scores()[,6],labels = 1:ncol(reduced_sv()),col = "blue")
+plot(scores()[,3],scores()[,5],xlab = paste(lab(),3,sep = ""), ylab = paste(lab(),5,sep = ""),pch=".")
+text(scores()[,3],scores()[,5],labels = 1:ncol(reduced_sv()),col = "blue")
+})
+
+# renderPlot({
+#   ggplot(scores(),aes(fs_plot1[1],fs_plot1[2])
+# })
+
+
+```
+
+### Outlier Block Investigation
+```{r }
+
+# observe({
+#   selectInput("block_invest","Select a block for further investigation",choices = 1:num_blocks())
+# })
+
+block_invest = reactive({
+  block_invest = as.numeric(input$block_invest)
+  block_invest = 14
+})
+sliderInput("invest_range","Choose how many columns to investigate",min=1,max=10,value=5,step=1)
+invest_range = reactive({
+  invest_range = as.numeric(input$invest_range)
+})
+
+BD_block = reactive({
+  BD_block = bd_row(reduced_sv(),block_invest())
+})
+
+top_cols = reactive({
+  top_cols = BD_block()$bd_index[1:invest_range()]
+})
+
+renderPlot({
+barplot(t(reduced_sv()[(block_invest() -4):(block_invest() +4),top_cols()]),names.arg = c((block_invest() -4):(block_invest() +4)), main = "Outlier Block Histogram",xlab = "Block #",ylab = "Count within each block",beside = TRUE,col = rainbow(invest_range()),cex.names = 0.7,las = 1,legend = colnames(reduced_sv())[top_cols()])
+})
+```

@@ -1,0 +1,20 @@
+{
+    "collab_server" : "",
+    "contents" : "#This is the base template for creating functions to be used in shiny apps for BDP\n#created by Isaac J. Faber\n#29 October 2015\n#In practice add all functions for data manipulation here and all visual specific code in the app.R file\n#The following are base functions that are required\nrequire('plyr')\n\n# quick little function to clear the data on bad queries.\n# must add all data objects here\nclearData <- function (values) {\n  values$data<-{}\n  values$new.data<-{}\n  values$loadedDataSets<-{}\n}\n\nupdateValues <- function(values){\n  \n  #create your data object here for calculations\n  new.data<-values$data\n  \n  #create your action table for report outputhere\n  #this data frame should be a logical subset\n  action<-values$data\n  \n  #uncomment the following five lines of code once actual cyer data is being used\n  #action<-as.data.frame(table(new.data$IP_DST,new.data$EXTERNALID_CUSTOMER))\n  #action<-action[action$Freq!=0,]\n  #action<-action[with(action,order(-Freq)),]\n  #rownames(action)<-NULL\n  #colnames(action)<-c('dest_ip','region','count')\n  action$action_req<-'Not Assigned'\n  action$behavior_type<-'Not Assigned'\n  \n  #do your heavy computation lifting here\n  #use a loop with progress bar to show users that you are doing work\n  withProgress(message = 'Doing Data Science Magic!', value = 0, {\n    \n#    for(i in 1:length(new.data[,1])){\n#      #example#\n#      #print(length(new.data))\n#      # Increment the progress bar, and update the detail text.\n#      incProgress(1/length(new.data[,1]), detail = paste(\"IP #\", i))\n#\n#    }\n  })\n\n  values$new.data<-new.data\n  values$action<-action\n}\n",
+    "created" : 1484745540137.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2824813313",
+    "id" : "F878E14F",
+    "lastKnownWriteTime" : 1484745691,
+    "last_content_update" : 1484745691798,
+    "path" : "~/Desktop/R Projects/Guti/template/lib/app/app_functions.R",
+    "project_path" : "lib/app/app_functions.R",
+    "properties" : {
+    },
+    "relative_order" : 3,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
