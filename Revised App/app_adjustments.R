@@ -84,9 +84,9 @@ if (IFS_score$rotated > IFS_score$unrotated) {
 combos = t(combn(1:FA_output$num_factors, m=2))
 combos = paste(combos[,1],combos[,2],sep = ",")
 
-##################
-# Color outliers #
-##################
+######################
+# Highlight outliers #
+######################
 # option 1 - color
 scores %>%
   dplyr::select(FS5, FS6) %>%
