@@ -1,0 +1,363 @@
+---
+title: "Anomoly Detection Prototype"
+output: 
+  flexdashboard::flex_dashboard
+    logo: logo.png
+    #orientation: rows
+runtime: shiny
+---
+
+```{r global, include=FALSE}
+options(width = 100,scipen = 999)
+library(shiny)
+library(rmarkdown)
+library(flexdashboard)
+library(lattice)
+library(matrixStats)
+library(networkD3)
+library(Matrix)
+library(caret)
+library(ggplot2)
+library(gplots)
+library(RColorBrewer)
+library(tidyr)
+library(dplyr)
+library(plotly)
+library(DT)
+
+library(qdapTools)
+
+source("Gutie_functions.R")
+source("Gutie_functions2.R")
+
+sampledata = as.data.frame(readr::read_csv("sampledata.csv"))
+
+charc_vars = which(lapply(sampledata, class) == "character",arr.ind = TRUE)
+sampledata[,charc_vars] = lapply(sampledata[,charc_vars],as.factor)
+num_rows = as.numeric(nrow(sampledata))
+block_choice = get_all_factors(num_rows)
+block_choice = block_choice$`39304`[7:16]
+```
+
+
+
+
+Sidebar {.sidebar}
+=====================================
+
+<style type="text/css"> .sidebar { overflow: auto; } </style>
+
+
+```{r}
+selectInput("blocks","Select size of blocks",choices = block_choice,selected = 289)
+
+block_length = reactive({
+  block_length = as.numeric(input$blocks)
+})
+
+num_blocks = reactive({
+  num_blocks = as.numeric(floor(num_rows / block_length()))
+})
+
+numericInput("num_IPs","Enter # of IPs to consider",value = 10, min = 0, max = 50)
+
+num_IPs = reactive({
+  num_IPs = as.numeric(input$num_IPs)
+})
+
+radioButtons("MD_plot","Select which plot you would like to view",choices = c("All blocks","Top 20"))
+
+radioButtons("FA_dim","",choices = c("Dimensionality Assessment","Factor Loadings Heatmap"))
+
+radioButtons("Net_graph","Choose size of IP Network Graph",choices = c("Entire Dataset","Block of Interest"))
+
+selectInput("block_invest","Select a block for further investigation (only for size = 289 obs)",choices = c(1:136))
+
+
+# sliderInput("hist_range","Choose how many columns to investigate in the histogram",min=1,max=10,value=5,step=1)
+# hist_range = reactive({
+#   hist_range = as.numeric(input$hist_range)
+# })
+
+selectInput("blocksize1","Select the size of the block to compare against 289",choices = block_choice,selected = 578)
+blocksize1 = reactive({
+  blocksize1 = as.numeric(input$blocksize1)
+})
+
+isolate({
+selectInput("blockint","Select the block of interest from the 289 obs block size",choices = c(1:136))
+})
+
+blockint = reactive({
+  blockint = as.numeric(input$blockint)
+})
+
+myvalue = reactive({
+  range1 = as.numeric(289*blockint())
+  range2 = as.numeric(range1 / blocksize1())
+  myvalue = ceiling(range2)
+  return(myvalue)
+})
+
+renderText({paste("The block of interest is now block ",myvalue())})
+
+```
+
+Data {data-orientation=rows}
+=====================================
+
+Row {data-height=300}
+-------------------------------------
+### Introduction
+
+Text here...
+
+Row {data-height=650}
+-------------------------------------
+
+### State Vector Data
+```{r}
+
+State_Vector = reactive({
+  State_Vector = TVA(sampledata,block_length(),num_IPs(),c("sourceAddress","destinationAddress"))
+})
+
+DT::renderDataTable({State_Vector()}, options=list(pageLength=10, order = list(list(1, 'asc')), scrollX=TRUE))
+
+```
+
+
+
+Histogram Matrix {data-orientation=rows}
+===================================== 
+
+```{r warning=FALSE}
+
+reduced_sv = reactive({
+  reduced_sv = MC_Adjust(State_Vector(),0.1,0.05)
+})
+
+MD_output = reactive({
+  MD_output = mahalanobis3(reduced_sv())
+  })
+
+DF2 = reactive({
+  N = nrow(reduced_sv())
+  M = ncol(reduced_sv())
+  temp2 = MD_output()$bd %*% diag(1/colSums(MD_output()$bd))
+  colnames(temp2) = colnames(MD_output()$bd)
+  temp3 = data.frame(cbind(c(1:N),MD_output()$md,temp2))
+  colnames(temp3)[1:2] = c("Block","MD")
+  DF2 = temp3 %>% gather(Col_Name,BD,3:(M+2))
+  DF2$Col_Name <- factor(DF2$Col_Name, levels=unique(DF2$Col_Name))
+  return(DF2)
+})
+
+DF3 = reactive({
+  M = ncol(reduced_sv())
+  top20 = MD_output()$md_index[1:20]
+  temp4 = MD_output()$bd %*% diag(1/colSums(MD_output()$bd))
+  colnames(temp4) = colnames(MD_output()$bd)
+  temp5 = data.frame(top20,MD_output()$md[top20],temp4[top20,])
+  colnames(temp5)[1:2] = c("Block","MD")
+  DF3 = temp5 %>% gather(Col_Name,BD,3:(M+2))
+  DF3$Col_Name <- factor(DF3$Col_Name, levels=unique(DF3$Col_Name))
+return(DF3)
+})
+
+renderPlotly({
+  if (input$MD_plot == "All blocks") {
+    
+  p = ggplot(DF2(),aes(x=Col_Name,y = Block,color = MD,size = BD)) +
+    geom_point() +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 45, hjust = 1),axis.text.y = element_text(angle = 0,hjust = -.5)) +
+    scale_y_discrete(name = "Data Blocks",limit = DF2()$Block) +
+    scale_color_gradient(low="white",high="steelblue") +
+    xlab(NULL)
+
+} else {
+
+  p = ggplot(DF3(),aes(x=Col_Name,y = Block,color = MD,size = BD)) +
+    geom_point() +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 45, hjust = 1),axis.text.y = element_text(angle = 0,hjust = -.5)) +
+    scale_y_discrete(name = "Data Blocks",limit = DF3()$Block) +
+    scale_color_gradient(low="white",high="steelblue") +
+    xlab(NULL)
+}
+  ggplotly(p)
+})
+```
+
+
+
+Factor Analysis {data-orientation=rows}
+=====================================  
+
+Row {data-height=650}
+-------------------------------------
+
+### Heatmap
+
+```{r warning=FALSE}
+curvepoints = reactive({
+  N = nrow(reduced_sv())
+  M = ncol(reduced_sv())
+  return(curvepoints = Hornscurve(N,M))
+  })
+
+PCA_output = reactive({
+  PCA_output = PCA(reduced_sv())
+})
+
+num_factors = reactive({
+  num_factors = sum(PCA_output()$eigval > curvepoints())
+})
+
+FA_output = reactive({
+  FA_output = Factor_Analysis(reduced_sv(),num_factors())
+})
+
+IFS_score = reactive({
+  IFS_score = list(unrotated = IFS(FA_output()$fa_loadings),rotated = IFS(FA_output()$fa_loadings_rotated))
+})
+
+myloadings = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    myloadings = as.matrix(FA_output()$fa_loadings_rotated)
+  } else {
+    myloadings = as.matrix(FA_output()$fa_loadings)
+  }
+  return(myloadings)
+})
+
+scores = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    scores = data.frame(FA_output()$fa_scores_rotated)
+    colnames(scores) = paste("FS",1:FA_output()$num_factors,sep="")
+  } else {
+    scores = data.frame(FA_output()$fa_scores)
+    colnames(scores) = paste("FS",1:FA_output()$num_factors,sep="")
+  }
+  return(scores)
+})
+
+lab = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    lab = "Rotated Scores: "
+  } else {
+    lab = "Original Scores: "
+  }
+  return(lab)
+})
+
+dim_df = reactive({
+  M = ncol(reduced_sv())
+  x = c(1:M)
+  y1 = curvepoints()
+  y2 = PCA_output()$eigval
+  dim_df = data.frame(x,y1,y2)
+  return(dim_df)
+})
+
+eig_df = reactive({
+  top_eig = dim_df()$y2[1:num_factors()]
+  eig_var = (dim_df()$y2 / sum(dim_df()$y2))[1:num_factors()]
+  eig_df = data.frame(top_eig,eig_var)
+  return(eig_df)
+})
+
+renderPlot({
+  
+heatmap.2(myloadings(),Rowv = FALSE,Colv = FALSE,dendrogram = "none",scale = "none",trace = "none",col = brewer.pal(8,"RdBu"),labRow = colnames(reduced_sv()),labCol = c(1:ncol(reduced_sv())),density.info = "none",lmat = rbind(c(4,4,0),c(2,1,0),c(3,3,0)), lhei = c(1,4,0.2), lwid = c(0.5,5,1),key.xlab = "",breaks = c(-1,-0.75,-0.5,-0.25,0,0.25,0.5,0.75,1),colsep = 1:ncol(myloadings()),rowsep = 1:nrow(myloadings()), sepcolor = "white",sepwidth = c(0.0001,0.0001),srtCol = 0,key.xtickfun = function() {
+            breaks = parent.frame()$breaks
+            list(at = parent.frame()$scale01(breaks),
+                 labels = breaks)
+})
+})
+
+
+```
+
+Row {data-height=350}
+-------------------------------------
+
+### Dimensionality Plot {data-width=400}
+
+```{r}
+renderPlotly({
+p2 = ggplot(dim_df(),aes(x)) + geom_line(aes(y=y1),color = "blue") + geom_point(aes(y=y2))
+ggplotly(p2)  
+})
+```
+
+### Dimensionality Data {data-width=200}
+
+```{r}
+renderDataTable({
+  eig_table <- eig_df() %>%
+    transmute(`Top Eigen Values` = round(top_eig, 2),
+           Variance = paste0(round(eig_var*100, 2), "%"))
+datatable(eig_table, rownames = FALSE,
+          options = list(columnDefs = list(list(
+            className = 'dt-right', targets = 1
+          ))))
+})
+```
+
+Quad Chart {data-orientation=rows}
+=====================================
+
+Row
+-------------------------------------
+
+### Chart 1
+```{r}
+combos = reactive({
+  combos = t(combn(1:num_factors(),m=2))
+  combos = paste(combos[,1],combos[,2],sep = ",")
+return(combos)
+# selectInput("fs_plot2","Select factor score pairing for plot 2",choices = )
+# selectInput("fs_plot3","Select factor score pairing for plot 3",choices = )
+# selectInput("fs_plot4","Select factor score pairing for plot 4",choices = )
+})
+
+# observe({
+# selectInput("fs_plot1","Select factor score pairing for plot 1",choices = combos())
+# })
+# fs_score_pair = reactive({
+#   fs_score_pair = matrix(nrow=2,ncol = 4)
+#   fs_score_pair[,1] = fs_plot1
+#   fs_score_pair[,2] = fs_plot2
+#   fs_score_pair[,3] = fs_plot3
+#   fs_score_pair[,4] = fs_plot4
+# })
+
+p <- reactive({
+  scores() %>%
+  dplyr::select(FS3, FS4) %>%
+  dplyr::mutate(outlier = pmax(abs(FS3), abs(FS4)))
+})
+
+renderPlotly({
+  
+  plot1 <- ggplot(p(), aes(x = FS3, y = FS4, alpha = outlier, label = 1:nrow(scores()))) + 
+  geom_text(show.legend = FALSE)
+  
+  ggplotly(plot1)
+
+})
+
+
+```
+
+### Chart 2
+
+Row
+-------------------------------------
+
+### Chart 3
+
+
+### Chart 4
