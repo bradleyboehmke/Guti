@@ -1,0 +1,519 @@
+---
+title: "Anomoly Detection Prototype"
+output: flexdashboard::flex_dashboard
+runtime: shiny
+---
+
+```{r global, include=FALSE}
+options(width = 100, scipen = 999)
+library(shiny)
+library(rmarkdown)
+library(flexdashboard)
+library(lattice)
+library(matrixStats)
+library(networkD3)
+library(Matrix)
+library(caret)
+library(ggplot2)
+library(gplots)
+library(RColorBrewer)
+library(tidyr)
+library(dplyr)
+library(plotly)
+library(DT)
+
+library(qdapTools)
+
+source("Gutie_functions.R")
+source("Gutie_functions2.R")
+
+sampledata = as.data.frame(readr::read_csv("sampledata.csv"))
+
+charc_vars = which(lapply(sampledata, class) == "character",arr.ind = TRUE)
+sampledata[,charc_vars] = lapply(sampledata[,charc_vars],as.factor)
+num_rows = as.numeric(nrow(sampledata))
+# block_choice = get_all_factors(num_rows)
+# block_choice = block_choice$`39304`[7:16]
+block_choice = c(136, 289, 578)
+```
+
+
+Sidebar {.sidebar}
+=====================================
+
+```{r}
+selectInput("blocks","Select size of blocks",choices = block_choice,selected = 289)
+
+block_length = reactive({
+  block_length = as.numeric(input$blocks)
+})
+
+num_blocks = reactive({
+  num_blocks = as.numeric(floor(num_rows / block_length()))
+})
+
+numericInput("num_IPs","Enter # of IPs to consider",value = 10, min = 0, max = 50)
+
+num_IPs = reactive({
+  num_IPs = as.numeric(input$num_IPs)
+})
+
+radioButtons("MD_plot","Select which plot you would like to view",choices = c("All blocks","Top 20"))
+
+radioButtons("Net_graph","Choose size of IP Network Graph",choices = c("Entire Dataset","Block of Interest"))
+
+selectInput("block_invest","Select a block for further investigation (only for size = 289 obs)",choices = c(1:136))
+
+selectInput("blocksize1","Select the size of the block to compare against 289",choices = block_choice,selected = 578)
+blocksize1 = reactive({
+  blocksize1 = as.numeric(input$blocksize1)
+})
+
+isolate({
+selectInput("blockint","Select the block of interest from the 289 obs block size",choices = c(1:136))
+})
+
+blockint = reactive({
+  blockint = as.numeric(input$blockint)
+})
+
+myvalue = reactive({
+  range1 = as.numeric(289*blockint())
+  range2 = as.numeric(range1 / blocksize1())
+  myvalue = floor(range2)
+  return(myvalue)
+})
+
+renderText({paste("The block of interest is now block ",myvalue())})
+
+```
+
+Data {data-orientation=rows}
+=====================================
+
+Row {data-height=300}
+-------------------------------------
+### Steps for performing anomaly detection
+
+1) Select the number of observations desired for each time block in the first drop down box.
+2) Select the number of IP addresses you would like to consider in the second input box.
+3) Observe the State Vector to see a representative count for the number of occurrences each unique value appeared in each time block.
+4) Go the Histogram Matrix page on the Nav Bar. You can toggle between viewing the entire Histogram Matrix or the Top 20 Outlier Blocks. An outlier time block is identified by a darker shade of blue. Within each time block, the circles represent the effect each variable had in causing the block to be an outlier.
+5) Based on your observation, select an outlier block for further investigation in the drop down box.
+6) Go to the Factor Analysis page on the Nav Bar. The heatmap illustrates the variable correlation relationships within each factor. A factor is the aggregation of correlated variables to explain some of the variance in the data. The plot on the bottom left shows the rationale for only retaining the amount of factors seen in the heatmap. The table on the bottom right displays the eigenvalues and the variance they embody for each factor
+7) Go to the Factor Scores page on the Nav Bar. Outlier blocks are labeled in red.
+8) Go to the Outlier Histograms page on the Nav Bar. Observe which variables caused the outlier block of interest to stand out. See if any IPs (S1-S10/D1-D10) stand out as a top variable.
+9) Go to the IP Network Graph page on the Nav Bar. Look for clusters either in the entire dataset or the block of interest. If looking at the block, see if the IP variable from step 8 occurs in a large cluster. Check for port scans and known suspicious IPs.
+
+Row {data-height=650}
+-------------------------------------
+
+### State Vector Data
+```{r}
+
+State_Vector = reactive({
+  State_Vector = TVA(sampledata,block_length(),num_IPs(),c("sourceAddress","destinationAddress"))
+  rownames(State_Vector) = 1:nrow(State_Vector)
+  return(State_Vector)
+})
+
+DT::renderDataTable(State_Vector(), options=list(pageLength=10, scrollX=TRUE))
+
+```
+
+
+
+Histogram Matrix {data-orientation=rows}
+===================================== 
+
+```{r warning=FALSE}
+
+reduced_sv = reactive({
+  reduced_sv = MC_Adjust(State_Vector(),0.1,0.05)
+})
+
+MD_output = reactive({
+  MD_output = mahalanobis3(reduced_sv())
+  })
+
+DF2 = reactive({
+  N = nrow(reduced_sv())
+  M = ncol(reduced_sv())
+  temp2 = MD_output()$bd %*% diag(1/colSums(MD_output()$bd))
+  colnames(temp2) = colnames(MD_output()$bd)
+  temp3 = data.frame(cbind(c(1:N),MD_output()$md,temp2))
+  colnames(temp3)[1:2] = c("Block","MD")
+  DF2 = temp3 %>% gather(Col_Name,BD,3:(M+2))
+  DF2$Col_Name <- factor(DF2$Col_Name, levels=unique(DF2$Col_Name))
+  return(DF2)
+})
+
+DF3 = reactive({
+  M = ncol(reduced_sv())
+  top20 = MD_output()$md_index[1:20]
+  temp4 = MD_output()$bd %*% diag(1/colSums(MD_output()$bd))
+  colnames(temp4) = colnames(MD_output()$bd)
+  temp5 = data.frame(top20,MD_output()$md[top20],temp4[top20,])
+  colnames(temp5)[1:2] = c("Block","MD")
+  DF3 = temp5 %>% gather(Col_Name,BD,3:(M+2))
+  DF3$Col_Name <- factor(DF3$Col_Name, levels=unique(DF3$Col_Name))
+return(DF3)
+})
+
+renderPlotly({
+  if (input$MD_plot == "All blocks") {
+    
+  p = ggplot(DF2(),aes(x=Col_Name,y = Block,color = MD,size = BD)) +
+    geom_point() +
+    theme(legend.position="right",
+          axis.text.x = element_text(angle = 45, hjust = 1),axis.text.y = element_text(angle = 0,hjust = -.5)) +
+    scale_y_discrete(name = "Data Blocks",limit = DF2()$Block) +
+    scale_color_gradient(low="white",high="steelblue") +
+    xlab(NULL)
+
+} else {
+
+  p = ggplot(DF3(),aes(x=Col_Name,y = Block,color = MD,size = BD)) +
+    geom_point() +
+    theme(legend.position="right",
+          axis.text.x = element_text(angle = 45, hjust = 1),axis.text.y = element_text(angle = 0,hjust = -.5)) +
+    scale_y_discrete(name = "Data Blocks",limit = DF3()$Block) +
+    scale_color_gradient(low="white",high="steelblue") +
+    xlab(NULL)
+}
+  ggplotly(p)
+})
+```
+
+
+
+Factor Analysis {data-orientation=rows}
+=====================================  
+
+Row {data-height=650}
+-------------------------------------
+
+### Heatmap
+
+```{r warning=FALSE}
+curvepoints = reactive({
+  N = nrow(reduced_sv())
+  M = ncol(reduced_sv())
+  return(curvepoints = Hornscurve(N,M))
+  })
+
+PCA_output = reactive({
+  PCA_output = PCA(reduced_sv())
+})
+
+num_factors = reactive({
+  num_factors = sum(PCA_output()$eigval > curvepoints())
+})
+
+FA_output = reactive({
+  FA_output = Factor_Analysis(reduced_sv(),num_factors())
+})
+
+IFS_score = reactive({
+  IFS_score = list(unrotated = IFS(FA_output()$fa_loadings),rotated = IFS(FA_output()$fa_loadings_rotated))
+})
+
+myloadings = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    myloadings = as.matrix(FA_output()$fa_loadings_rotated)
+  } else {
+    myloadings = as.matrix(FA_output()$fa_loadings)
+  }
+  return(myloadings)
+})
+
+scores = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    scores = data.frame(FA_output()$fa_scores_rotated)
+    colnames(scores) = paste("FS",1:num_factors(),sep="")
+  } else {
+    scores = data.frame(FA_output()$fa_scores)
+    colnames(scores) = paste("FS",1:num_factors(),sep="")
+  }
+  return(scores)
+})
+
+lab = reactive({
+  if (IFS_score()$rotated > IFS_score()$unrotated) {
+    lab = "Rotated Scores: "
+  } else {
+    lab = "Original Scores: "
+  }
+  return(lab)
+})
+
+dim_df = reactive({
+  M = ncol(reduced_sv())
+  x = c(1:M)
+  y1 = curvepoints()
+  y2 = PCA_output()$eigval
+  dim_df = data.frame(x,y1,y2)
+  return(dim_df)
+})
+
+eig_df = reactive({
+  top_eig = dim_df()$y2[1:num_factors()]
+  eig_var = (dim_df()$y2 / sum(dim_df()$y2))[1:num_factors()]
+  eig_df = data.frame(top_eig,eig_var)
+  return(eig_df)
+})
+
+# renderPlot({
+#   
+# heatmap.2(myloadings(),Rowv = FALSE,Colv = FALSE,dendrogram = "none",scale = "none",trace = "none",col = brewer.pal(8,"RdBu"),labRow = colnames(reduced_sv()),labCol = c(1:ncol(reduced_sv())),density.info = "none",lmat = rbind(c(4,4,0),c(2,1,0),c(3,3,0)), lhei = c(1,4,0.2), lwid = c(0.5,5,1),key.xlab = "",breaks = c(-1,-0.75,-0.5,-0.25,0,0.25,0.5,0.75,1),colsep = 1:ncol(myloadings()),rowsep = 1:nrow(myloadings()), sepcolor = "white",sepwidth = c(0.0001,0.0001),srtCol = 0,key.xtickfun = function() {
+#             breaks = parent.frame()$breaks
+#             list(at = parent.frame()$scale01(breaks),
+#                  labels = breaks)})
+# })
+
+renderPlotly({
+  test3 = data.frame(myloadings(),colnames(reduced_sv())) %>% gather(Factor,Loading,1:num_factors())
+  colnames(test3)[1] = "Variable"
+  heatmap = ggplot(test3,aes(x=Factor,y = Variable,fill=Loading)) + geom_tile(color = "white") + xlab(NULL) + ylab(NULL) + scale_fill_gradientn(colors = brewer.pal(8,"RdBu"),breaks = c(-1,-0.75,-0.5,-0.25,0,0.25,0.5,0.75,1),name = NULL) + theme_minimal() +
+        theme(panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              legend.position = "right",
+              legend.title = NULL)
+  ggplotly(heatmap)
+})
+
+```
+
+Row {data-height=350}
+-------------------------------------
+
+### Dimensionality Plot {data-width=400}
+
+```{r}
+renderPlotly({
+p2 = ggplot(dim_df(),aes(x)) + geom_line(aes(y=y1),color = "blue") + geom_point(aes(y=y2))
+ggplotly(p2)  
+})
+```
+
+### Dimensionality Data {data-width=200}
+
+```{r}
+renderDataTable({
+  eig_table <- eig_df() %>%
+    transmute(`Top Eigen Values` = round(top_eig, 2),
+           Variance = paste0(round(eig_var*100, 2), "%"))
+datatable(eig_table, rownames = FALSE,
+          options = list(columnDefs = list(list(
+            className = 'dt-right', targets = 1
+          ))))
+})
+```
+
+Factor Scores {data-orientation=rows}
+=====================================
+
+Row
+-------------------------------------
+
+### Chart 1
+```{r}
+
+p1 <- reactive({
+  p1 = scores() %>%
+  dplyr::select(FS1, FS2) %>% 
+  dplyr::mutate(outlier = ifelse(abs(FS1) > 2 | abs(FS2) > 2, FALSE, TRUE))
+  return(p1)
+})
+
+renderPlotly({
+  
+  plot1 <- ggplot(p1(), aes(x = FS1, y = FS2, color = outlier, label = 1:nrow(scores()))) + 
+  geom_text(show.legend = FALSE)
+  
+  ggplotly(plot1)
+
+})
+
+
+```
+
+### Chart 2
+```{r}
+
+p2 <- reactive({
+  p2 = scores() %>%
+  dplyr::select(FS3, FS4) %>% 
+  dplyr::mutate(outlier = ifelse(abs(FS3) > 2 | abs(FS4) > 2, FALSE, TRUE))
+  return(p2)
+})
+
+renderPlotly({
+  
+  plot2 <- ggplot(p2(), aes(x = FS3, y = FS4, color = outlier, label = 1:nrow(scores()))) + 
+  geom_text(show.legend = FALSE)
+  
+  ggplotly(plot2)
+
+})
+
+
+```
+
+Row
+-------------------------------------
+
+### Chart 3
+```{r}
+
+p3 <- reactive({
+  p3 = scores() %>%
+  dplyr::select(FS5, FS6) %>% 
+  dplyr::mutate(outlier = ifelse(abs(FS5) > 2 | abs(FS6) > 2, FALSE, TRUE))
+  return(p3)
+})
+
+renderPlotly({
+  
+  plot3 <- ggplot(p3(), aes(x = FS5, y = FS6, color = outlier, label = 1:nrow(scores()))) + 
+  geom_text(show.legend = FALSE)
+  
+  ggplotly(plot3)
+
+})
+
+
+```
+
+### Chart 4
+```{r}
+
+p4 <- reactive({
+  p4 = scores() %>%
+  dplyr::select(FS3, FS5) %>% 
+  dplyr::mutate(outlier = ifelse(abs(FS3) > 2 | abs(FS5) > 2, FALSE, TRUE))
+  return(p4)
+})
+
+renderPlotly({
+  
+  plot4 <- ggplot(p4(), aes(x = FS3, y = FS5, color = outlier, label = 1:nrow(scores()))) + 
+  geom_text(show.legend = FALSE)
+  
+  ggplotly(plot4)
+
+})
+
+
+```
+
+Outlier Histograms {data-orientation=rows}
+===================================== 
+```{r}
+
+block_invest = reactive({
+  block_invest = as.numeric(input$block_invest)
+})
+
+BD_block = reactive({
+  BD_block = bd_row(reduced_sv(),block_invest())
+})
+
+top_cols = reactive({
+  top_cols = BD_block()$bd_index[1:5]
+})
+
+invest_range = reactive({
+  if (block_invest() < 5) {
+  invest_range = c(1:(block_invest() +4))
+  } else {
+  invest_range = c((block_invest() -4):(block_invest() +4))
+  }
+})
+
+renderPlot({
+par(mfrow=c(2,2))
+barplot(t(reduced_sv()[invest_range(),top_cols()]),names.arg = invest_range(), main = "Outlier Block Histogram",xlab = "Block #",ylab = "Count within each block",beside = TRUE,col = rainbow(5),cex.names = 0.7,las = 1,legend = colnames(reduced_sv())[top_cols()])
+
+barplot(t(reduced_sv()[invest_range(),1:5]),names.arg = invest_range(), main = "Outlier Block Histogram",xlab = "Block #",ylab = "Count within each block",beside = TRUE,col = rainbow(5),cex.names = 0.7,las = 1,legend = colnames(reduced_sv())[1:5])
+
+barplot(t(reduced_sv()[invest_range(),6:10]),names.arg = invest_range(), main = "Outlier Block Histogram",xlab = "Block #",ylab = "Count within each block",beside = TRUE,col = rainbow(5),cex.names = 0.7,las = 1,legend = colnames(reduced_sv())[5:10])
+
+barplot(t(reduced_sv()[invest_range(),17:21]),names.arg = invest_range(), main = "Outlier Block Histogram",xlab = "Block #",ylab = "Count within each block",beside = TRUE,col = rainbow(5),cex.names = 0.7,las = 1,legend = colnames(reduced_sv())[17:21])
+})
+
+```
+
+IP Network Graph {data-orientation=rows}
+===================================== 
+
+Row {data-height=700}
+-------------------------------------
+
+### Network graph
+
+```{r}
+network = reactive({
+  if (input$Net_graph == "Entire Dataset") {
+    src = sampledata$sourceAddress
+    target = sampledata$destinationAddress
+    network = data.frame(src,target)
+  } else {
+    start = ((block_invest() -1)*block_length()) +1
+    stopp = start+ block_length() - 1
+    src = sampledata$sourceAddress[start:stopp]
+    target = sampledata$destinationAddress[start:stopp]
+    network = data.frame(src,target)
+  }
+  return(network)
+})
+
+renderSimpleNetwork(simpleNetwork(network(),width = 1200,zoom=T))
+
+```
+
+Row {data-height=350}
+-------------------------------------
+
+### Source IP Address
+
+```{r}
+
+src_IPs = reactive({
+    start = ((block_invest() -1)*block_length()) +1
+    stopp = start+ block_length() - 1
+    src = summary(sampledata$sourceAddress[start:stopp])[1:num_IPs()]
+    src_IPs = data.frame(paste("S",1:num_IPs(),sep = ""),names(src),src)
+    colnames(src_IPs) = c("State Vector ID","IP Address","Count")
+  return(src_IPs)
+})
+
+renderDataTable({
+  datatable(src_IPs(), rownames = FALSE,
+          options = list(pageLength = 5, scrollx = TRUE,columnDefs = list(list(
+            className = 'dt-right', targets = 1
+          ))))
+})
+```
+
+### Destination IP Address
+
+```{r}
+
+dst_IPs = reactive({
+    start = ((block_invest() -1)*block_length()) +1
+    stopp = start+ block_length() - 1
+    dst = summary(sampledata$destinationAddress[start:stopp])[1:num_IPs()]
+    dst_IPs = data.frame(paste("D",1:num_IPs(),sep = ""),names(dst),dst)
+    colnames(dst_IPs) = c("State Vector ID","IP Address","Count")
+  return(dst_IPs)
+})
+
+renderDataTable({
+datatable(dst_IPs(), rownames = FALSE,
+          options = list(pageLength = 5, scrollx = TRUE,columnDefs = list(list(
+            className = 'dt-right', targets = 1
+          ))))
+})
+
+```
